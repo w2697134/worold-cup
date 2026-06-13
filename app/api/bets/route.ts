@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiUser } from "@/lib/server-auth";
 import type { ValueOutcome } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -33,6 +34,9 @@ interface PaperBetBody {
 const DATA_FILE = path.join(process.cwd(), "data", "paper-bets.jsonl");
 
 export async function GET(req: NextRequest) {
+  const auth = await requireApiUser(req);
+  if (auth instanceof NextResponse) return auth;
+
   const matchId = req.nextUrl.searchParams.get("matchId");
   const limit = clamp(Number(req.nextUrl.searchParams.get("limit") ?? 50), 1, 200);
   const bets = (await readBets())
@@ -49,6 +53,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireApiUser(req);
+  if (auth instanceof NextResponse) return auth;
+
   let body: PaperBetBody;
   try {
     body = (await req.json()) as PaperBetBody;

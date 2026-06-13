@@ -2,14 +2,8 @@
 
 import { FormEvent, useState } from "react";
 import type { AuthUser } from "@/lib/client-state";
-import { AUTH_SESSION_STORAGE_KEY, AUTH_USERS_STORAGE_KEY } from "@/lib/client-state";
+import { AUTH_SESSION_STORAGE_KEY } from "@/lib/client-state";
 import { appPath } from "@/lib/base-path";
-
-interface StoredUser extends AuthUser {
-  salt: string;
-  passwordHash: string;
-  createdAt: string;
-}
 
 type Mode = "login" | "register";
 
@@ -33,47 +27,8 @@ export function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) 
     setError("");
     try {
       const serverUser = await tryServerAuth(mode, displayName, pass);
-      if (serverUser) {
-        persistSession(serverUser);
-        onLogin(serverUser);
-        return;
-      }
-
-      const users = readUsers();
-      const id = userIdFromName(displayName);
-      const existing = users[id];
-
-      if (mode === "register") {
-        if (existing) {
-          setError("这个账号已经存在。");
-          return;
-        }
-        const salt = createSalt();
-        const user: StoredUser = {
-          id,
-          name: displayName,
-          salt,
-          passwordHash: await hashPassword(pass, salt),
-          createdAt: new Date().toISOString(),
-        };
-        users[id] = user;
-        writeUsers(users);
-        persistSession(user);
-        onLogin({ id: user.id, name: user.name });
-        return;
-      }
-
-      if (!existing) {
-        setError("账号不存在。");
-        return;
-      }
-      const nextHash = await hashPassword(pass, existing.salt);
-      if (nextHash !== existing.passwordHash) {
-        setError("密码不对。");
-        return;
-      }
-      persistSession(existing);
-      onLogin({ id: existing.id, name: existing.name });
+      persistSession(serverUser);
+      onLogin(serverUser);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "登录失败，请重试。");
     } finally {
@@ -145,22 +100,6 @@ export function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) 
   );
 }
 
-function readUsers(): Record<string, StoredUser> {
-  try {
-    const raw = localStorage.getItem(AUTH_USERS_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, StoredUser>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeUsers(users: Record<string, StoredUser>) {
-  localStorage.setItem(AUTH_USERS_STORAGE_KEY, JSON.stringify(users));
-}
-
 function persistSession(user: AuthUser) {
   localStorage.setItem(
     AUTH_SESSION_STORAGE_KEY,
@@ -172,39 +111,19 @@ async function tryServerAuth(
   mode: Mode,
   name: string,
   password: string,
-): Promise<AuthUser | null> {
+): Promise<AuthUser> {
   const response = await fetch(appPath("/api/auth"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mode, name, password }),
   }).catch(() => null);
 
-  if (!response || response.status === 503) return null;
+  if (!response || response.status === 503) {
+    throw new Error("登录服务暂时不可用，请稍后再试。");
+  }
   const data = (await response.json().catch(() => ({}))) as { user?: AuthUser; error?: string };
-  if (!response.ok || !data.user) {
+  if (!response.ok || !data.user?.token) {
     throw new Error(data.error ?? "登录失败，请重试。");
   }
   return data.user;
-}
-
-function userIdFromName(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function createSalt(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return bytesToHex(bytes);
-}
-
-async function hashPassword(password: string, salt: string): Promise<string> {
-  const bytes = new TextEncoder().encode(`${salt}:${password}`);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return bytesToHex(new Uint8Array(digest));
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 }

@@ -46,6 +46,7 @@ export function PredictionDrawer({
   initialPrediction,
   forceRefresh = false,
   requestId = 0,
+  authToken,
   onBeforePredict,
   onPredictionGenerated,
   onClose,
@@ -56,6 +57,7 @@ export function PredictionDrawer({
   initialPrediction?: Prediction;
   forceRefresh?: boolean;
   requestId?: number;
+  authToken?: string;
   onBeforePredict?: (match: Match, currentKnowledgeContext: string) => Promise<string>;
   onPredictionGenerated?: (prediction: Prediction) => void;
   onClose: () => void;
@@ -101,7 +103,7 @@ export function PredictionDrawer({
 
       const response = await fetch(appPath("/api/predict"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders(authToken),
         body: JSON.stringify({
           matchId: match.id,
           knowledgeContext: preparedKnowledgeContext,
@@ -138,6 +140,7 @@ export function PredictionDrawer({
     initialPrediction?.matchId,
     knowledgeContext,
     match,
+    authToken,
     onBeforePredict,
     onPredictionGenerated,
     requestId,
@@ -420,6 +423,13 @@ export function PredictionDrawer({
       </aside>
     </>
   );
+}
+
+function jsonHeaders(authToken?: string): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+  };
 }
 
 function TeamBlock({

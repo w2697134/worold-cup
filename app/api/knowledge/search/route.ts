@@ -9,6 +9,7 @@ import {
   normalizeKnowledgeItems,
 } from "@/lib/knowledge";
 import { callQwenJson, getQwenConfigStatus } from "@/lib/qwen";
+import { requireApiUser } from "@/lib/server-auth";
 import type { KnowledgeCategory, KnowledgeItem, KnowledgeReliability, Match } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +33,9 @@ interface RawSearchResult {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireApiUser(req);
+  if (auth instanceof NextResponse) return auth;
+
   let body: SearchBody;
   try {
     body = await req.json();

@@ -13,9 +13,11 @@ import { appPath } from "@/lib/base-path";
 import {
   ACTIVE_MATCH_EVENT,
   ACTIVE_MATCH_STORAGE_KEY,
+  AUTH_SESSION_STORAGE_KEY,
   KNOWLEDGE_STORAGE_KEY,
   KNOWLEDGE_UPDATED_EVENT,
 } from "@/lib/client-state";
+import type { AuthUser } from "@/lib/client-state";
 
 interface StoredKnowledge {
   items?: KnowledgeItem[];
@@ -190,7 +192,7 @@ export function AgentPet() {
     try {
       const response = await fetch(appPath("/api/agent"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders(getAuthToken()),
         body: JSON.stringify({
           message: text,
           history,
@@ -406,7 +408,7 @@ async function applyActions(actions: AgentActions | undefined, selectedMatch: Ma
     try {
       const response = await fetch(appPath("/api/knowledge/compile"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders(getAuthToken()),
         body: JSON.stringify({ items: scopedItems }),
       });
       const data = (await response.json()) as { compiled?: CompiledKnowledge };
@@ -527,4 +529,21 @@ function friendlyError(error: unknown) {
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `agent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getAuthToken(): string | undefined {
+  try {
+    const raw = localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+    const session = raw ? (JSON.parse(raw) as Partial<AuthUser>) : null;
+    return session?.token || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function jsonHeaders(authToken?: string): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+  };
 }

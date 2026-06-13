@@ -23,7 +23,15 @@ const OUTCOME_LABEL: Record<PredictionOutcome, string> = {
   awayWin: "客胜",
 };
 
-export function ReviewPanel({ matches, embedded = false }: { matches: Match[]; embedded?: boolean }) {
+export function ReviewPanel({
+  matches,
+  embedded = false,
+  authToken,
+}: {
+  matches: Match[];
+  embedded?: boolean;
+  authToken?: string;
+}) {
   const [open, setOpen] = useState(false);
   const [payload, setPayload] = useState<ReviewPayload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,7 +49,7 @@ export function ReviewPanel({ matches, embedded = false }: { matches: Match[]; e
     try {
       const response = await fetch(appPath("/api/review"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders(authToken),
         body: JSON.stringify({}),
       });
       const data = (await response.json()) as ReviewResponse;
@@ -167,6 +175,13 @@ export function ReviewPanel({ matches, embedded = false }: { matches: Match[]; e
       </div>
     </section>
   );
+}
+
+function jsonHeaders(authToken?: string): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+  };
 }
 
 function Metric({

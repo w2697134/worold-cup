@@ -4,10 +4,14 @@ import {
   compileKnowledgeWithDeepSeek,
   normalizeKnowledgeItems,
 } from "@/lib/knowledge";
+import { requireApiUser } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  const auth = await requireApiUser(req);
+  if (auth instanceof NextResponse) return auth;
+
   let body: { items?: unknown };
   try {
     body = await req.json();

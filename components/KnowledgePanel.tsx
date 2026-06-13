@@ -283,7 +283,7 @@ export function KnowledgePanel({
     try {
       const response = await fetch(appPath("/api/knowledge/compile"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders(authToken),
         body: JSON.stringify({ items: nextItems }),
       });
       const data = (await response.json()) as ApiResponse;
@@ -317,7 +317,7 @@ export function KnowledgePanel({
     try {
       const response = await fetch(appPath("/api/knowledge/search"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders(authToken),
         body: JSON.stringify({
           query: searchQuery,
           matchId: selectedMatchId || undefined,
@@ -371,7 +371,7 @@ export function KnowledgePanel({
     try {
       const response = await fetch(appPath("/api/agent"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders(authToken),
         body: JSON.stringify({
           message: [
             "请把下面内容导入当前比赛知识库。",
@@ -804,6 +804,13 @@ function compactText(value: string, limit = 92): string {
   const text = value.trim();
   if (text.length <= limit) return text;
   return `${text.slice(0, limit)}...`;
+}
+
+function jsonHeaders(authToken?: string): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+  };
 }
 
 function readLocalKnowledge(storageKey: string): StoredKnowledge | null {

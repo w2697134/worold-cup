@@ -103,8 +103,10 @@ export default function Home() {
     try {
       const raw = localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
       const session = raw ? (JSON.parse(raw) as Partial<AuthUser>) : null;
-      if (session?.id && session.name) {
-        setCurrentUser({ id: session.id, name: session.name });
+      if (session?.id && session.name && session.token) {
+        setCurrentUser({ id: session.id, name: session.name, token: session.token });
+      } else {
+        localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
       }
     } catch {
       setCurrentUser(null);
@@ -123,8 +125,8 @@ export default function Home() {
     setKnowledge({ prompt: "", scopeKey: null });
     setStrategyConfig(undefined);
     setScheduleState("loading");
-    setLoading(Boolean(currentUser));
-  }, [currentUser?.id]);
+    setLoading(Boolean(currentUser?.token));
+  }, [currentUser?.id, currentUser?.token]);
 
   const handleCompiledChange = useCallback(
     (payload: {
@@ -185,12 +187,14 @@ export default function Home() {
 
   const ensureKnowledgeForPrediction = useCallback(
     async (match: Match, currentKnowledgeContext: string) => {
+      const authToken = currentUser?.token;
+      if (!authToken) throw new Error("请先登录。");
+
       const currentPrompt = currentKnowledgeContext.trim();
       if (knowledge.scopeKey === match.id && currentPrompt) return currentPrompt;
 
       const stored = await readStoredKnowledgeForPrediction(
-        currentUser?.token,
-        knowledgeStorageKey,
+        authToken,
       );
       if (
         stored?.compiledScopeKey === match.id &&
@@ -206,8 +210,8 @@ export default function Home() {
       const scopeItems = existingItems.filter((item) => !item.matchId || item.matchId === match.id);
       const prepared =
         matchItems.length > 0
-          ? await compileExistingKnowledge(scopeItems)
-          : await searchKnowledgeForMatch(match, scopeItems);
+          ? await compileExistingKnowledge(scopeItems, authToken)
+          : await searchKnowledgeForMatch(match, authToken, scopeItems);
 
       if (!prepared.compiled?.prompt?.trim() || (prepared.compiled.sourceCount ?? 0) === 0) {
         throw new Error("这场还没有可用情报，自动联网也没有找到可入库内容。");
@@ -220,7 +224,7 @@ export default function Home() {
       };
 
       await saveStoredKnowledgeForPrediction(
-        currentUser?.token,
+        authToken,
         knowledgeStorageKey,
         nextState,
       );
@@ -232,7 +236,7 @@ export default function Home() {
   );
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser?.token) return;
     setLoading(true);
     setScheduleState("loading");
     fetch(appPath("/api/matches"))
@@ -249,39 +253,40 @@ export default function Home() {
         setScheduleState("error");
       })
       .finally(() => setLoading(false));
-  }, [currentUser]);
+  }, [currentUser?.token]);
 
   useEffect(() => {
-    if (!currentUser || !predictionCacheStorageKey) return;
+    if (!currentUser?.token || !predictionCacheStorageKey) return;
+    const authToken = currentUser.token;
     let cancelled = false;
     setPredictionCacheHydrated(false);
 
     async function loadPredictionState() {
       try {
-        if (currentUser?.token) {
-          const response = await fetch(appPath("/api/user/predictions"), {
-            headers: { Authorization: `Bearer ${currentUser.token}` },
-          });
-          if (response.ok) {
-            const data = (await response.json()) as {
-              activeMatchId?: string | null;
-              predictionCache?: Record<string, Prediction>;
-            };
-            if (!cancelled) {
-              setStoredActiveMatchId(data.activeMatchId ?? null);
-              setPredictionCache(data.predictionCache ?? {});
-            }
-          } else if (!cancelled) {
-            setStoredActiveMatchId(localStorage.getItem(activeMatchStorageKey));
-            setPredictionCache(readLocalPredictionCache(predictionCacheStorageKey));
+        const response = await fetch(appPath("/api/user/predictions"), {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (response.status === 401) {
+          localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+          if (!cancelled) setCurrentUser(null);
+          return;
+        }
+        if (response.ok) {
+          const data = (await response.json()) as {
+            activeMatchId?: string | null;
+            predictionCache?: Record<string, Prediction>;
+          };
+          if (!cancelled) {
+            setStoredActiveMatchId(data.activeMatchId ?? null);
+            setPredictionCache(data.predictionCache ?? {});
           }
         } else if (!cancelled) {
-          setStoredActiveMatchId(localStorage.getItem(activeMatchStorageKey));
-          setPredictionCache(readLocalPredictionCache(predictionCacheStorageKey));
+          setStoredActiveMatchId(null);
+          setPredictionCache({});
         }
       } catch {
         if (!cancelled) {
-          setStoredActiveMatchId(localStorage.getItem(activeMatchStorageKey));
+          setStoredActiveMatchId(null);
           setPredictionCache({});
         }
       } finally {
@@ -296,23 +301,20 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [activeMatchStorageKey, currentUser, predictionCacheStorageKey]);
+  }, [currentUser?.token, predictionCacheStorageKey]);
 
   useEffect(() => {
     if (!predictionCacheHydrated || !predictionCacheStorageKey) return;
     const activeMatchId = activeMatch?.id ?? storedActiveMatchId ?? null;
-    if (currentUser?.token) {
-      void fetch(appPath("/api/user/predictions"), {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${currentUser.token}`,
-        },
-        body: JSON.stringify({ activeMatchId, predictionCache }),
-      }).catch(() => undefined);
-    } else {
-      localStorage.setItem(predictionCacheStorageKey, JSON.stringify(predictionCache));
-    }
+    if (!currentUser?.token) return;
+    void fetch(appPath("/api/user/predictions"), {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${currentUser.token}`,
+      },
+      body: JSON.stringify({ activeMatchId, predictionCache }),
+    }).catch(() => undefined);
   }, [
     activeMatch?.id,
     currentUser?.token,
@@ -369,7 +371,7 @@ export default function Home() {
     );
   }
 
-  if (!currentUser) {
+  if (!currentUser?.token) {
     return <LoginScreen onLogin={setCurrentUser} />;
   }
 
@@ -509,7 +511,7 @@ export default function Home() {
                 key={match.id}
                 match={match}
                 active={activeMatch?.id === match.id}
-                hasPrediction={Boolean(predictionCache[match.id])}
+                prediction={predictionCache[match.id]}
                 onSelect={handleSelectMatch}
                 onPredict={handleOpenPrediction}
                 onRegenerate={handleRegeneratePrediction}
@@ -530,7 +532,7 @@ export default function Home() {
 
         <StrategyPanel embedded />
 
-        <ReviewPanel matches={matches} embedded />
+        <ReviewPanel matches={matches} authToken={currentUser.token} embedded />
       </section>
 
       <PredictionDrawer
@@ -540,6 +542,7 @@ export default function Home() {
         initialPrediction={selected ? predictionCache[selected.id] : undefined}
         forceRefresh={predictionRequest.forceRefresh}
         requestId={predictionRequest.requestId}
+        authToken={currentUser.token}
         onBeforePredict={ensureKnowledgeForPrediction}
         onPredictionGenerated={handlePredictionGenerated}
         onClose={() => setSelected(null)}
@@ -577,54 +580,42 @@ function readLocalPredictionCache(storageKey: string): Record<string, Prediction
 }
 
 async function readStoredKnowledgeForPrediction(
-  authToken: string | undefined,
-  storageKey: string,
+  authToken: string,
 ): Promise<StoredKnowledge | null> {
-  if (authToken) {
-    const response = await fetch(appPath("/api/user/knowledge"), {
-      headers: { Authorization: `Bearer ${authToken}` },
-    });
-    if (response.ok) return (await response.json()) as StoredKnowledge;
-    if (response.status !== 401 && response.status !== 503) {
-      throw new Error("读取知识库失败。");
-    }
+  const response = await fetch(appPath("/api/user/knowledge"), {
+    headers: { Authorization: `Bearer ${authToken}` },
+  });
+  if (response.ok) return (await response.json()) as StoredKnowledge;
+  if (response.status === 401) {
+    localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    throw new Error("登录已失效，请重新登录。");
   }
-
-  if (!storageKey) return null;
-  try {
-    const raw = localStorage.getItem(storageKey);
-    return raw ? (JSON.parse(raw) as StoredKnowledge) : null;
-  } catch {
-    return null;
+  if (response.status === 503) {
+    throw new Error("登录服务暂时不可用。");
   }
+  throw new Error("读取知识库失败。");
 }
 
 async function saveStoredKnowledgeForPrediction(
-  authToken: string | undefined,
+  authToken: string,
   storageKey: string,
   state: StoredKnowledge,
 ) {
-  if (authToken) {
-    const response = await fetch(appPath("/api/user/knowledge"), {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${authToken}`,
-      },
-      body: JSON.stringify(state),
-    });
-    if (!response.ok) throw new Error("知识库保存失败。");
-  }
-
-  if (storageKey) {
-    localStorage.setItem(storageKey, JSON.stringify(state));
-  }
+  const response = await fetch(appPath("/api/user/knowledge"), {
+    method: "PUT",
+    headers: jsonHeaders(authToken),
+    body: JSON.stringify(state),
+  });
+  if (!response.ok) throw new Error("知识库保存失败。");
 }
 
-async function compileExistingKnowledge(items: KnowledgeItem[]): Promise<KnowledgeApiResponse> {
+async function compileExistingKnowledge(
+  items: KnowledgeItem[],
+  authToken: string,
+): Promise<KnowledgeApiResponse> {
   const response = await fetch(appPath("/api/knowledge/compile"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: jsonHeaders(authToken),
     body: JSON.stringify({ items }),
   });
   const data = (await response.json()) as KnowledgeApiResponse;
@@ -634,11 +625,12 @@ async function compileExistingKnowledge(items: KnowledgeItem[]): Promise<Knowled
 
 async function searchKnowledgeForMatch(
   match: Match,
+  authToken: string,
   existingItems: KnowledgeItem[] = [],
 ): Promise<KnowledgeApiResponse> {
   const response = await fetch(appPath("/api/knowledge/search"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: jsonHeaders(authToken),
     body: JSON.stringify({
       query: buildDefaultKnowledgeSearchQuery(match),
       matchId: match.id,
@@ -648,6 +640,13 @@ async function searchKnowledgeForMatch(
   const data = (await response.json()) as KnowledgeApiResponse;
   if (!response.ok || data.error) throw new Error(data.error ?? "自动联网搜索失败。");
   return data;
+}
+
+function jsonHeaders(authToken: string): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${authToken}`,
+  };
 }
 
 function buildDefaultKnowledgeSearchQuery(match: Match): string {

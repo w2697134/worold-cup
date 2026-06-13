@@ -1,4 +1,4 @@
-import type { Match } from "@/lib/types";
+import type { Match, Prediction } from "@/lib/types";
 import { getTeamName, isMatchupKnown, isPredictableMatch } from "@/lib/data";
 import { formatChinaKickoff } from "@/lib/time";
 import { Flag } from "./Flag";
@@ -12,14 +12,14 @@ const STATUS_LABEL: Record<Match["status"], string> = {
 export function MatchCard({
   match,
   active = false,
-  hasPrediction = false,
+  prediction,
   onSelect,
   onPredict,
   onRegenerate,
 }: {
   match: Match;
   active?: boolean;
-  hasPrediction?: boolean;
+  prediction?: Prediction;
   onSelect: (match: Match) => void;
   onPredict: (match: Match) => void;
   onRegenerate: (match: Match) => void;
@@ -65,6 +65,16 @@ export function MatchCard({
             <span className="font-display text-3xl leading-none tracking-wider text-white">
               {match.result.home}:{match.result.away}
             </span>
+          ) : prediction ? (
+            <div className="flex flex-col items-center gap-1">
+              <span className="rounded-full bg-emerald-400/14 px-2 py-0.5 text-[10px] font-bold text-emerald-200 ring-1 ring-emerald-300/25">
+                预测
+              </span>
+              <span className="font-display text-2xl leading-none tracking-wider text-white">
+                {prediction.predictedScore.home}:{prediction.predictedScore.away}
+              </span>
+              <span className="font-display text-sm leading-none text-white/28">对阵</span>
+            </div>
           ) : (
             <span className="font-display text-lg leading-none text-white/30">对阵</span>
           )}
@@ -78,7 +88,7 @@ export function MatchCard({
           {match.city} · {match.venue}
         </span>
         {canPredict ? (
-          hasPrediction ? (
+          prediction ? (
             <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"

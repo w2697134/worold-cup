@@ -3,6 +3,7 @@ import { predictMatch } from "@/lib/predict";
 import { predictWithDeepSeek, hasDeepSeekKey } from "@/lib/deepseek";
 import { isPredictableMatch } from "@/lib/data";
 import { getMatches } from "@/lib/fixtures";
+import { requireApiUser } from "@/lib/server-auth";
 import type { Match, PredictionStrategyConfig } from "@/lib/types";
 
 // POST /api/predict
@@ -13,6 +14,9 @@ import type { Match, PredictionStrategyConfig } from "@/lib/types";
 // any error) falls back to the deterministic stub. The chosen engine is reflected
 // in prediction.source ("skill" | "stub").
 export async function POST(req: NextRequest) {
+  const auth = await requireApiUser(req);
+  if (auth instanceof NextResponse) return auth;
+
   let body: {
     matchId?: string;
     home?: string;

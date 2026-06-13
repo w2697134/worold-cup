@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMatches } from "@/lib/fixtures";
 import { reviewMatch, summarize } from "@/lib/review";
+import { requireApiUser } from "@/lib/server-auth";
 import type { Match } from "@/lib/types";
 
 interface ReviewRequestBody {
@@ -11,6 +12,9 @@ interface ReviewRequestBody {
 // body: { matchId? }
 // Reviews finished matches with final scores against the deterministic baseline.
 export async function POST(req: NextRequest) {
+  const auth = await requireApiUser(req);
+  if (auth instanceof NextResponse) return auth;
+
   let body: ReviewRequestBody;
 
   try {
