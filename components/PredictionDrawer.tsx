@@ -46,6 +46,7 @@ export function PredictionDrawer({
   initialPrediction,
   forceRefresh = false,
   requestId = 0,
+  onBeforePredict,
   onPredictionGenerated,
   onClose,
 }: {
@@ -55,11 +56,13 @@ export function PredictionDrawer({
   initialPrediction?: Prediction;
   forceRefresh?: boolean;
   requestId?: number;
+  onBeforePredict?: (match: Match, currentKnowledgeContext: string) => Promise<string>;
   onPredictionGenerated?: (prediction: Prediction) => void;
   onClose: () => void;
 }) {
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingLabel, setLoadingLabel] = useState("生成中...");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -68,6 +71,7 @@ export function PredictionDrawer({
       setPrediction(null);
       setError(null);
       setLoading(false);
+      setLoadingLabel("生成中...");
       return;
     }
 
@@ -77,6 +81,7 @@ export function PredictionDrawer({
       setPrediction(cachedPrediction);
       setError(null);
       setLoading(false);
+      setLoadingLabel("生成中...");
       return;
     }
 
@@ -84,25 +89,35 @@ export function PredictionDrawer({
     setPrediction(null);
     setError(null);
     setLoading(true);
+    setLoadingLabel("先整理情报...");
 
-    fetch(appPath("/api/predict"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ matchId: match.id, knowledgeContext, strategyConfig }),
-    })
-      .then(async (response) => {
+    void (async () => {
+      const preparedKnowledgeContext = onBeforePredict
+        ? await onBeforePredict(match, knowledgeContext ?? "")
+        : knowledgeContext;
+
+      if (cancelled) return;
+      setLoadingLabel("生成预测...");
+
+      const response = await fetch(appPath("/api/predict"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          matchId: match.id,
+          knowledgeContext: preparedKnowledgeContext,
+          strategyConfig,
+        }),
+      });
+
         const data = (await response.json()) as { prediction?: Prediction; error?: string };
         if (!response.ok || data.error) {
           throw new Error(data.error ?? "预测失败");
         }
-        return data.prediction;
-      })
-      .then((nextPrediction) => {
-        if (!cancelled) {
-          setPrediction(nextPrediction ?? null);
-          if (nextPrediction) onPredictionGenerated?.(nextPrediction);
-        }
-      })
+        const nextPrediction = data.prediction;
+        if (cancelled) return;
+        setPrediction(nextPrediction ?? null);
+        if (nextPrediction) onPredictionGenerated?.(nextPrediction);
+    })()
       .catch((nextError: unknown) => {
         if (!cancelled) {
           setError(friendlyError(nextError));
@@ -111,6 +126,7 @@ export function PredictionDrawer({
       .finally(() => {
         if (!cancelled) {
           setLoading(false);
+          setLoadingLabel("生成中...");
         }
       });
 
@@ -122,6 +138,7 @@ export function PredictionDrawer({
     initialPrediction?.matchId,
     knowledgeContext,
     match,
+    onBeforePredict,
     onPredictionGenerated,
     requestId,
     strategyConfig,
@@ -226,7 +243,7 @@ export function PredictionDrawer({
             {loading && (
               <div className="flex items-center justify-center rounded-lg border border-white/8 bg-white/[0.035] py-10 text-sm text-white/55">
                 <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
-                生成中...
+                {loadingLabel}
               </div>
             )}
 

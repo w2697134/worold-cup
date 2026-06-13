@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Match, Prediction, PredictionStrategyConfig } from "@/lib/types";
-import { getTeamName, isMatchupKnown } from "@/lib/data";
+import type { CompiledKnowledge, KnowledgeItem, Match, Prediction, PredictionStrategyConfig } from "@/lib/types";
+import { getTeamName, getTeamNameEn, isMatchupKnown } from "@/lib/data";
 import { formatChinaKickoff, getChinaDateKey, toUtcFromVenueTime } from "@/lib/time";
 import { appPath } from "@/lib/base-path";
 import { MatchCard } from "@/components/MatchCard";
@@ -17,11 +17,26 @@ import {
   AUTH_SESSION_STORAGE_KEY,
   PREDICTION_CACHE_STORAGE_KEY,
   KNOWLEDGE_STORAGE_KEY,
+  KNOWLEDGE_UPDATED_EVENT,
   scopedStorageKey,
 } from "@/lib/client-state";
 import type { AuthUser } from "@/lib/client-state";
 
 type ScheduleState = "loading" | "live" | "snapshot" | "error";
+type StoredKnowledge = {
+  items?: KnowledgeItem[];
+  compiled?: CompiledKnowledge | null;
+  compiledScopeKey?: string | null;
+};
+
+type KnowledgeApiResponse = {
+  items?: KnowledgeItem[];
+  incomingItems?: KnowledgeItem[];
+  compiled?: CompiledKnowledge;
+  notice?: string;
+  warning?: string;
+  error?: string;
+};
 
 const TODAY = getChinaTodayKey();
 
@@ -167,6 +182,54 @@ export default function Home() {
       [prediction.matchId]: prediction,
     }));
   }, []);
+
+  const ensureKnowledgeForPrediction = useCallback(
+    async (match: Match, currentKnowledgeContext: string) => {
+      const currentPrompt = currentKnowledgeContext.trim();
+      if (knowledge.scopeKey === match.id && currentPrompt) return currentPrompt;
+
+      const stored = await readStoredKnowledgeForPrediction(
+        currentUser?.token,
+        knowledgeStorageKey,
+      );
+      if (
+        stored?.compiledScopeKey === match.id &&
+        stored.compiled?.prompt?.trim() &&
+        (stored.compiled.sourceCount ?? 0) > 0
+      ) {
+        setKnowledge({ prompt: stored.compiled.prompt, scopeKey: match.id });
+        return stored.compiled.prompt;
+      }
+
+      const existingItems = Array.isArray(stored?.items) ? stored.items : [];
+      const matchItems = existingItems.filter((item) => item.matchId === match.id);
+      const scopeItems = existingItems.filter((item) => !item.matchId || item.matchId === match.id);
+      const prepared =
+        matchItems.length > 0
+          ? await compileExistingKnowledge(scopeItems)
+          : await searchKnowledgeForMatch(match, scopeItems);
+
+      if (!prepared.compiled?.prompt?.trim() || (prepared.compiled.sourceCount ?? 0) === 0) {
+        throw new Error("这场还没有可用情报，自动联网也没有找到可入库内容。");
+      }
+
+      const nextState: StoredKnowledge = {
+        items: mergeKnowledgeCollections(existingItems, prepared.items ?? scopeItems),
+        compiled: prepared.compiled,
+        compiledScopeKey: match.id,
+      };
+
+      await saveStoredKnowledgeForPrediction(
+        currentUser?.token,
+        knowledgeStorageKey,
+        nextState,
+      );
+      setKnowledge({ prompt: prepared.compiled.prompt, scopeKey: match.id });
+      window.dispatchEvent(new Event(KNOWLEDGE_UPDATED_EVENT));
+      return prepared.compiled.prompt;
+    },
+    [currentUser?.token, knowledge.scopeKey, knowledgeStorageKey],
+  );
 
   useEffect(() => {
     if (!currentUser) return;
@@ -477,6 +540,7 @@ export default function Home() {
         initialPrediction={selected ? predictionCache[selected.id] : undefined}
         forceRefresh={predictionRequest.forceRefresh}
         requestId={predictionRequest.requestId}
+        onBeforePredict={ensureKnowledgeForPrediction}
         onPredictionGenerated={handlePredictionGenerated}
         onClose={() => setSelected(null)}
       />
@@ -510,4 +574,117 @@ function readLocalPredictionCache(storageKey: string): Record<string, Prediction
   } catch {
     return {};
   }
+}
+
+async function readStoredKnowledgeForPrediction(
+  authToken: string | undefined,
+  storageKey: string,
+): Promise<StoredKnowledge | null> {
+  if (authToken) {
+    const response = await fetch(appPath("/api/user/knowledge"), {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    if (response.ok) return (await response.json()) as StoredKnowledge;
+    if (response.status !== 401 && response.status !== 503) {
+      throw new Error("读取知识库失败。");
+    }
+  }
+
+  if (!storageKey) return null;
+  try {
+    const raw = localStorage.getItem(storageKey);
+    return raw ? (JSON.parse(raw) as StoredKnowledge) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveStoredKnowledgeForPrediction(
+  authToken: string | undefined,
+  storageKey: string,
+  state: StoredKnowledge,
+) {
+  if (authToken) {
+    const response = await fetch(appPath("/api/user/knowledge"), {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(state),
+    });
+    if (!response.ok) throw new Error("知识库保存失败。");
+  }
+
+  if (storageKey) {
+    localStorage.setItem(storageKey, JSON.stringify(state));
+  }
+}
+
+async function compileExistingKnowledge(items: KnowledgeItem[]): Promise<KnowledgeApiResponse> {
+  const response = await fetch(appPath("/api/knowledge/compile"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  const data = (await response.json()) as KnowledgeApiResponse;
+  if (!response.ok || data.error) throw new Error(data.error ?? "知识库整理失败。");
+  return data;
+}
+
+async function searchKnowledgeForMatch(
+  match: Match,
+  existingItems: KnowledgeItem[] = [],
+): Promise<KnowledgeApiResponse> {
+  const response = await fetch(appPath("/api/knowledge/search"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: buildDefaultKnowledgeSearchQuery(match),
+      matchId: match.id,
+      existingItems,
+    }),
+  });
+  const data = (await response.json()) as KnowledgeApiResponse;
+  if (!response.ok || data.error) throw new Error(data.error ?? "自动联网搜索失败。");
+  return data;
+}
+
+function buildDefaultKnowledgeSearchQuery(match: Match): string {
+  const homeName = getTeamName(match.home);
+  const awayName = getTeamName(match.away);
+  const homeNameEn = getTeamNameEn(match.home);
+  const awayNameEn = getTeamNameEn(match.away);
+
+  return [
+    "World Cup 2026",
+    `${homeName} ${homeNameEn}`,
+    "vs",
+    `${awayName} ${awayNameEn}`,
+    match.date,
+    "latest odds ranking injury lineup team news weather head to head form",
+  ].join(" ");
+}
+
+function mergeKnowledgeCollections(
+  existing: KnowledgeItem[],
+  incoming: KnowledgeItem[],
+): KnowledgeItem[] {
+  const byKey = new Map<string, KnowledgeItem>();
+
+  for (const item of existing) {
+    byKey.set(knowledgeItemKey(item), item);
+  }
+  for (const item of incoming) {
+    byKey.set(knowledgeItemKey(item), item);
+  }
+
+  return Array.from(byKey.values()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function knowledgeItemKey(item: KnowledgeItem): string {
+  if (item.sourceUrl) return `url:${item.sourceUrl}`;
+  return `text:${item.matchId ?? "global"}|${item.title.toLowerCase()}|${item.content
+    .slice(0, 96)
+    .toLowerCase()}`;
 }
