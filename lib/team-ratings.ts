@@ -1,0 +1,76 @@
+export const TEAM_RATING: Record<string, number> = {
+  mx: 74,
+  za: 62,
+  kr: 73,
+  cz: 71,
+  ca: 68,
+  ba: 66,
+  qa: 63,
+  ch: 76,
+  br: 86,
+  ma: 78,
+  ht: 56,
+  "gb-sct": 70,
+  us: 75,
+  py: 70,
+  au: 69,
+  tr: 75,
+  de: 84,
+  cw: 55,
+  ci: 70,
+  ec: 74,
+  nl: 83,
+  jp: 77,
+  se: 73,
+  tn: 66,
+  be: 80,
+  eg: 74,
+  ir: 72,
+  nz: 58,
+  es: 87,
+  cv: 60,
+  sa: 66,
+  uy: 80,
+  fr: 88,
+  sn: 77,
+  iq: 61,
+  no: 76,
+  ar: 87,
+  dz: 72,
+  at: 76,
+  jo: 58,
+  pt: 85,
+  cd: 66,
+  uz: 63,
+  co: 78,
+  "gb-eng": 86,
+  hr: 78,
+  gh: 69,
+  pa: 60,
+};
+
+const HOST_CITY_BY_TEAM: Record<string, string[]> = {
+  mx: ["墨西哥城", "瓜达拉哈拉", "蒙特雷"],
+  ca: ["多伦多", "温哥华"],
+  us: [
+    "洛杉矶",
+    "旧金山湾区",
+    "西雅图",
+    "纽约/新泽西",
+    "波士顿",
+    "费城",
+    "迈阿密",
+    "亚特兰大",
+    "达拉斯",
+    "休斯敦",
+    "堪萨斯城",
+  ],
+};
+
+export function hostBoost(teamCode: string, city: string): number {
+  return HOST_CITY_BY_TEAM[teamCode]?.includes(city) ? 6 : 0;
+}
+
+export function hostGoalAdvantage(teamCode: string, city: string): number {
+  return hostBoost(teamCode, city) > 0 ? 0.3 : 0;
+}

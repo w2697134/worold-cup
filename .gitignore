@@ -1,0 +1,27 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# env files (keep secrets out of git)
+.env*.local
+.env
+
+# debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-server*.log
+
+# local build cache
+tsconfig.tsbuildinfo
+output/
+
+# misc
+.DS_Store
+*.pem
