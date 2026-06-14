@@ -103,6 +103,7 @@ export function KnowledgePanel({
           setCompiled(null);
           setCompiledScopeKey(null);
           setStatus("未整理");
+          setHydrated(true);
           return;
         }
 
@@ -112,9 +113,11 @@ export function KnowledgePanel({
         setStatus(stored.compiledScopeKey ? "已加载" : "未整理");
       } catch {
         setStatus("读取失败");
-      } finally {
-        setHydrated(true);
+        setHydrated(false);
+        return;
       }
+
+      setHydrated(true);
     }
 
     function handleStorage(event: StorageEvent) {
@@ -418,10 +421,20 @@ export function KnowledgePanel({
   }
 
   const hasSavedItems = filteredItems.length > 0;
+  const accountItemCount = items.length;
   const compiledReady = Boolean(currentCompiled && currentCompiled.sourceCount > 0);
   const showOutput = compiledReady || hasSavedItems;
   const scopeLabel = selectedMatch
     ? `${getTeamName(selectedMatch.home)} 对 ${getTeamName(selectedMatch.away)}`
+    : "not found";
+  const knowledgeSummary = selectedMatch
+    ? hasSavedItems
+      ? accountItemCount > filteredItems.length
+        ? `本场 ${filteredItems.length} 条 · 账号共 ${accountItemCount} 条`
+        : `${filteredItems.length} 条情报`
+      : accountItemCount > 0
+        ? `本场 0 条 · 账号共 ${accountItemCount} 条`
+        : "赛前情报"
     : "not found";
 
   return (
@@ -447,7 +460,7 @@ export function KnowledgePanel({
               <h2 className="text-2xl font-extrabold tracking-normal text-white">知识库</h2>
             </div>
             <p className="mt-2 text-sm font-semibold text-white/70">
-              {selectedMatch ? (hasSavedItems ? `${filteredItems.length} 条情报` : "赛前情报") : "not found"}
+              {knowledgeSummary}
             </p>
           </div>
           <div className="flex justify-end">
@@ -822,7 +835,8 @@ async function fetchServerKnowledge(token: string): Promise<StoredKnowledge | nu
   const response = await fetch(appPath("/api/user/knowledge"), {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (response.status === 503 || response.status === 401) return null;
+  if (response.status === 401) throw new Error("登录已失效");
+  if (response.status === 503) throw new Error("数据库暂时不可用");
   if (!response.ok) throw new Error("读取知识库失败");
   return (await response.json()) as StoredKnowledge;
 }
