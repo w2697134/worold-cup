@@ -26,6 +26,7 @@ export function MatchCard({
 }) {
   const finished = match.status === "finished";
   const canPredict = isPredictableMatch(match);
+  const showPrediction = !finished && prediction;
   const helperLabel =
     match.status === "live" ? "进行中" : isMatchupKnown(match) ? "已结束" : "球队待定";
 
@@ -65,7 +66,7 @@ export function MatchCard({
             <span className="font-display text-3xl leading-none tracking-wider text-white">
               {match.result.home}:{match.result.away}
             </span>
-          ) : prediction ? (
+          ) : showPrediction ? (
             <div className="flex flex-col items-center gap-1">
               <span className="rounded-full bg-emerald-400/14 px-2 py-0.5 text-[10px] font-bold text-emerald-200 ring-1 ring-emerald-300/25">
                 预测
@@ -74,6 +75,11 @@ export function MatchCard({
                 {prediction.predictedScore.home}:{prediction.predictedScore.away}
               </span>
               <span className="font-display text-sm leading-none text-white/28">对阵</span>
+            </div>
+          ) : finished ? (
+            <div className="flex flex-col items-center gap-1 text-center">
+              <span className="text-sm font-bold leading-tight text-white/65">待更新</span>
+              <span className="text-[11px] font-semibold text-white/32">赛果</span>
             </div>
           ) : (
             <span className="font-display text-lg leading-none text-white/30">对阵</span>

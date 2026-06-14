@@ -69,7 +69,7 @@ export function PredictionDrawer({
 
   useEffect(() => {
     // 已结束、进行中、或淘汰赛球队未定时，不生成赛前预测。
-    if (!match || (match.status === "finished" && match.result) || !isPredictableMatch(match)) {
+    if (!match || match.status === "finished" || !isPredictableMatch(match)) {
       setPrediction(null);
       setError(null);
       setLoading(false);
@@ -148,7 +148,8 @@ export function PredictionDrawer({
   ]);
 
   const open = Boolean(match);
-  const finished = Boolean(match && match.status === "finished" && match.result);
+  const finished = Boolean(match && match.status === "finished");
+  const hasFinalScore = Boolean(match?.result);
   const canPredict = Boolean(match && isPredictableMatch(match));
   const matchupKnown = Boolean(match && isMatchupKnown(match));
   const blockedReason =
@@ -199,13 +200,13 @@ export function PredictionDrawer({
             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
               <TeamBlock code={match.home} name={getTeamName(match.home)} />
               <div className="flex min-w-[108px] flex-col items-center">
-                {finished && match.result ? (
+                {hasFinalScore && match?.result ? (
                   <span className="font-display text-5xl font-semibold tracking-normal text-white">
                     {match.result.home}
                     <span className="mx-1 text-white/35">:</span>
                     {match.result.away}
                   </span>
-                ) : prediction ? (
+                ) : !finished && prediction ? (
                   <span className="font-display text-5xl font-semibold tracking-normal text-white">
                     {prediction.predictedScore.home}
                     <span className="mx-1 text-white/35">:</span>
@@ -215,7 +216,7 @@ export function PredictionDrawer({
                   <span className="font-display text-3xl text-white/25">--:--</span>
                 )}
                 <span className="mt-1 text-[10px] font-semibold uppercase tracking-widest text-white/40">
-                  {finished ? "最终比分" : canPredict ? "预测比分" : "暂无预测"}
+                  {hasFinalScore ? "最终比分" : finished ? "赛果待更新" : canPredict ? "预测比分" : "暂无预测"}
                 </span>
                 {!finished && prediction?.poisson && (
                   <span className="mt-1 text-[11px] text-white/45">
@@ -233,7 +234,9 @@ export function PredictionDrawer({
                   <span className="h-1.5 w-1.5 rounded-full bg-white/45" />
                   本场已结束
                 </span>
-                <span className="text-white/45">已展示最终比分，不再生成预测</span>
+                <span className="text-white/45">
+                  {hasFinalScore ? "已展示最终比分，不再生成预测" : "等待赛果更新，不再展示旧预测"}
+                </span>
               </div>
             )}
 
@@ -256,7 +259,7 @@ export function PredictionDrawer({
               </div>
             )}
 
-            {prediction && (
+            {!finished && prediction && (
               <div className="flex flex-col gap-6">
                 <section>
                   <SectionTitle>胜平负概率</SectionTitle>
