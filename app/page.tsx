@@ -373,10 +373,17 @@ export default function Home() {
     if (!scroller || !button) return;
 
     const nextLeft = button.offsetLeft - (scroller.clientWidth - button.clientWidth) / 2;
-    scroller.scrollTo({
-      left: Math.max(0, nextLeft),
-      behavior: scheduleDateInitializedRef.current ? "smooth" : "auto",
-    });
+    const scrollLeft = Math.max(0, nextLeft);
+
+    try {
+      if (typeof scroller.scrollTo === "function") {
+        scroller.scrollTo({ left: scrollLeft, behavior: "smooth" });
+      } else {
+        scroller.scrollLeft = scrollLeft;
+      }
+    } catch {
+      scroller.scrollLeft = scrollLeft;
+    }
   }, [activeDate, chinaDates]);
 
   const handleSchedulePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
@@ -390,7 +397,9 @@ export default function Home() {
       scrollLeft: scroller.scrollLeft,
       hasDragged: false,
     };
-    scroller.setPointerCapture(event.pointerId);
+    if (typeof scroller.setPointerCapture === "function") {
+      scroller.setPointerCapture(event.pointerId);
+    }
   }, []);
 
   const handleSchedulePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
@@ -406,7 +415,11 @@ export default function Home() {
   const handleSchedulePointerEnd = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const scroller = scheduleScrollerRef.current;
     scheduleDragRef.current.isDragging = false;
-    if (scroller?.hasPointerCapture(event.pointerId)) {
+    if (
+      typeof scroller?.hasPointerCapture === "function" &&
+      typeof scroller.releasePointerCapture === "function" &&
+      scroller.hasPointerCapture(event.pointerId)
+    ) {
       scroller.releasePointerCapture(event.pointerId);
     }
   }, []);
