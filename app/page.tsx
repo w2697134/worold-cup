@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import type { CompiledKnowledge, KnowledgeItem, Match, Prediction, PredictionStrategyConfig } from "@/lib/types";
 import { getTeamName, getTeamNameEn, isMatchupKnown } from "@/lib/data";
+import { countBlockedKnowledgeItems, filterKnowledgeItemsForMatch } from "@/lib/knowledge-quality";
 import { formatChinaKickoff, getChinaDateKey, toUtcFromVenueTime } from "@/lib/time";
 import { appPath } from "@/lib/base-path";
 import { MatchCard } from "@/components/MatchCard";
@@ -78,6 +80,15 @@ export default function Home() {
     scopeKey: null,
   });
   const [strategyConfig, setStrategyConfig] = useState<PredictionStrategyConfig | undefined>();
+  const scheduleScrollerRef = useRef<HTMLDivElement | null>(null);
+  const dateButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const scheduleDateInitializedRef = useRef(false);
+  const scheduleDragRef = useRef({
+    isDragging: false,
+    startX: 0,
+    scrollLeft: 0,
+    hasDragged: false,
+  });
 
   const activeMatchStorageKey = useMemo(
     () => (currentUser ? scopedStorageKey(ACTIVE_MATCH_STORAGE_KEY, currentUser.id) : ""),
@@ -116,9 +127,11 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    scheduleDateInitializedRef.current = false;
     setMatches([]);
     setSelected(null);
     setActiveMatch(null);
+    setActiveDate(TODAY);
     setStoredActiveMatchId(null);
     setPredictionCache({});
     setPredictionCacheHydrated(false);
@@ -196,18 +209,24 @@ export default function Home() {
       const stored = await readStoredKnowledgeForPrediction(
         authToken,
       );
+      const existingItems = Array.isArray(stored?.items) ? stored.items : [];
+      const rawScopeItems = existingItems.filter((item) => !item.matchId || item.matchId === match.id);
+      const blockedScopeCount = countBlockedKnowledgeItems(rawScopeItems, match);
+      const scopeItems = filterKnowledgeItemsForMatch(rawScopeItems, match);
+      const matchItems = filterKnowledgeItemsForMatch(
+        existingItems.filter((item) => item.matchId === match.id),
+        match,
+      );
       if (
         stored?.compiledScopeKey === match.id &&
         stored.compiled?.prompt?.trim() &&
-        (stored.compiled.sourceCount ?? 0) > 0
+        (stored.compiled.sourceCount ?? 0) > 0 &&
+        blockedScopeCount === 0
       ) {
         setKnowledge({ prompt: stored.compiled.prompt, scopeKey: match.id });
         return stored.compiled.prompt;
       }
 
-      const existingItems = Array.isArray(stored?.items) ? stored.items : [];
-      const matchItems = existingItems.filter((item) => item.matchId === match.id);
-      const scopeItems = existingItems.filter((item) => !item.matchId || item.matchId === match.id);
       const prepared =
         matchItems.length > 0
           ? await compileExistingKnowledge(scopeItems, authToken)
@@ -218,7 +237,13 @@ export default function Home() {
       }
 
       const nextState: StoredKnowledge = {
-        items: mergeKnowledgeCollections(existingItems, prepared.items ?? scopeItems),
+        items: mergeKnowledgeCollections(
+          mergeKnowledgeCollections(
+            existingItems.filter((item) => item.matchId && item.matchId !== match.id),
+            scopeItems,
+          ),
+          prepared.items ?? scopeItems,
+        ),
         compiled: prepared.compiled,
         compiledScopeKey: match.id,
       };
@@ -329,11 +354,71 @@ export default function Home() {
     [matches],
   );
 
+  const nearestDate = useMemo(() => getNearestScheduleDate(matches), [matches]);
+
   useEffect(() => {
-    if (chinaDates.length > 0 && !chinaDates.includes(activeDate)) {
-      setActiveDate(chinaDates[0]);
+    if (chinaDates.length === 0) return;
+    if (scheduleDateInitializedRef.current && chinaDates.includes(activeDate)) return;
+
+    const nextDate = nearestDate ?? chinaDates[0];
+    scheduleDateInitializedRef.current = true;
+    if (nextDate && nextDate !== activeDate) {
+      setActiveDate(nextDate);
     }
+  }, [activeDate, chinaDates, nearestDate]);
+
+  useEffect(() => {
+    const scroller = scheduleScrollerRef.current;
+    const button = dateButtonRefs.current[activeDate];
+    if (!scroller || !button) return;
+
+    const nextLeft = button.offsetLeft - (scroller.clientWidth - button.clientWidth) / 2;
+    scroller.scrollTo({
+      left: Math.max(0, nextLeft),
+      behavior: scheduleDateInitializedRef.current ? "smooth" : "auto",
+    });
   }, [activeDate, chinaDates]);
+
+  const handleSchedulePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const scroller = scheduleScrollerRef.current;
+    if (!scroller) return;
+
+    scheduleDragRef.current = {
+      isDragging: true,
+      startX: event.clientX,
+      scrollLeft: scroller.scrollLeft,
+      hasDragged: false,
+    };
+    scroller.setPointerCapture(event.pointerId);
+  }, []);
+
+  const handleSchedulePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = scheduleDragRef.current;
+    const scroller = scheduleScrollerRef.current;
+    if (!drag.isDragging || !scroller) return;
+
+    const deltaX = event.clientX - drag.startX;
+    if (Math.abs(deltaX) > 4) drag.hasDragged = true;
+    scroller.scrollLeft = drag.scrollLeft - deltaX;
+  }, []);
+
+  const handleSchedulePointerEnd = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const scroller = scheduleScrollerRef.current;
+    scheduleDragRef.current.isDragging = false;
+    if (scroller?.hasPointerCapture(event.pointerId)) {
+      scroller.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  const selectScheduleDate = useCallback((date: string) => {
+    if (scheduleDragRef.current.hasDragged) {
+      scheduleDragRef.current.hasDragged = false;
+      return;
+    }
+
+    setActiveDate(date);
+  }, []);
 
   const dayMatches = useMemo(
     () => matches.filter((match) => getChinaDateKey(match) === activeDate),
@@ -471,21 +556,45 @@ export default function Home() {
           <span className="text-xs text-white/42">北京时间 · {dayMatches.length} 场</span>
         </div>
 
-        <div className="mb-5 flex gap-2 overflow-x-auto pb-1">
+        <div
+          ref={scheduleScrollerRef}
+          onPointerDown={handleSchedulePointerDown}
+          onPointerMove={handleSchedulePointerMove}
+          onPointerUp={handleSchedulePointerEnd}
+          onPointerCancel={handleSchedulePointerEnd}
+          className="mb-5 flex cursor-grab gap-2 overflow-x-auto px-[calc(50%_-_36px)] pb-2 pt-2 active:cursor-grabbing"
+        >
           {chinaDates.map((date) => {
             const active = date === activeDate;
+            const nearest = date === nearestDate;
 
             return (
               <button
                 key={date}
+                ref={(element) => {
+                  dateButtonRefs.current[date] = element;
+                }}
                 type="button"
-                onClick={() => setActiveDate(date)}
-                className={`flex shrink-0 flex-col items-center rounded-lg px-4 py-2 text-sm transition ${
+                onClick={() => selectScheduleDate(date)}
+                className={`relative flex h-[64px] min-w-[72px] shrink-0 flex-col items-center justify-center rounded-lg px-4 text-sm transition ${
                   active
                     ? "bg-emerald-500 text-ink-900"
-                    : "glass text-white/70 hover:text-white"
+                    : nearest
+                      ? "glass text-white/80 ring-1 ring-emerald-400/35 hover:text-white"
+                      : "glass text-white/70 hover:text-white"
                 }`}
               >
+                {nearest && (
+                  <span
+                    className={`absolute -top-1.5 rounded-full px-1.5 py-0.5 text-[9px] font-black ${
+                      active
+                        ? "bg-ink-900/15 text-ink-900"
+                        : "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/25"
+                    }`}
+                  >
+                    最近
+                  </span>
+                )}
                 <span className="font-semibold">{formatDate(date)}</span>
                 <span className={`text-[10px] ${active ? "text-ink-900/70" : "text-white/40"}`}>
                   {weekday(date)}
@@ -565,6 +674,31 @@ function getChinaTodayKey(): string {
     }, {});
 
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function getNearestScheduleDate(matches: Match[]): string | null {
+  const now = Date.now();
+  let nearest: { date: string; time: number; futureRank: 0 | 1 } | null = null;
+
+  for (const match of matches) {
+    const time = toUtcFromVenueTime(match).getTime();
+    const futureRank = time >= now ? 0 : 1;
+
+    if (
+      !nearest ||
+      futureRank < nearest.futureRank ||
+      (futureRank === 0 && nearest.futureRank === 0 && time < nearest.time) ||
+      (futureRank === 1 && nearest.futureRank === 1 && time > nearest.time)
+    ) {
+      nearest = {
+        date: getChinaDateKey(match),
+        time,
+        futureRank,
+      };
+    }
+  }
+
+  return nearest?.date ?? null;
 }
 
 function readLocalPredictionCache(storageKey: string): Record<string, Prediction> {
@@ -657,11 +791,16 @@ function buildDefaultKnowledgeSearchQuery(match: Match): string {
 
   return [
     "World Cup 2026",
+    "official FIFA match centre",
     `${homeName} ${homeNameEn}`,
     "vs",
     `${awayName} ${awayNameEn}`,
     match.date,
-    "latest odds ranking injury lineup team news weather head to head form",
+    match.utcDate ?? "",
+    match.venue,
+    match.city,
+    "latest 2026 odds ranking injury lineup team news weather head to head form",
+    "exclude old qualification claims that contradict the fixture",
   ].join(" ");
 }
 

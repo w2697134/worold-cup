@@ -10,6 +10,7 @@ import type {
   PredictionStrategyConfig,
 } from "@/lib/types";
 import { getTeamName, getTeamNameEn } from "@/lib/data";
+import { countBlockedKnowledgeItems, filterKnowledgeItemsForMatch } from "@/lib/knowledge-quality";
 import { normalizeStrategyConfig } from "@/lib/strategies";
 import { KNOWLEDGE_STORAGE_KEY, KNOWLEDGE_UPDATED_EVENT } from "@/lib/client-state";
 import { appPath } from "@/lib/base-path";
@@ -152,11 +153,20 @@ export function KnowledgePanel({
 
   const filteredItems = useMemo(() => {
     if (!selectedMatchId) return [];
-    return items.filter((item) => !item.matchId || item.matchId === selectedMatchId);
-  }, [items, selectedMatchId]);
+    const scopeItems = items.filter((item) => !item.matchId || item.matchId === selectedMatchId);
+    return filterKnowledgeItemsForMatch(scopeItems, selectedMatch);
+  }, [items, selectedMatch, selectedMatchId]);
+
+  const blockedScopeCount = useMemo(() => {
+    if (!selectedMatchId) return 0;
+    const scopeItems = items.filter((item) => !item.matchId || item.matchId === selectedMatchId);
+    return countBlockedKnowledgeItems(scopeItems, selectedMatch);
+  }, [items, selectedMatch, selectedMatchId]);
 
   const currentCompiled =
-    selectedScopeKey && compiled && compiledScopeKey === selectedScopeKey ? compiled : null;
+    selectedScopeKey && compiled && compiledScopeKey === selectedScopeKey && blockedScopeCount === 0
+      ? compiled
+      : null;
   const strategyConfig = useMemo(
     () => normalizeStrategyConfig(),
     [],
@@ -178,16 +188,31 @@ export function KnowledgePanel({
     const awayNameEn = getTeamNameEn(selectedMatch.away);
     return [
       "World Cup 2026",
+      "official FIFA match centre",
       `${homeName} ${homeNameEn}`,
       "vs",
       `${awayName} ${awayNameEn}`,
       selectedMatch.date,
-      "latest odds ranking injury lineup team news weather head to head form",
+      selectedMatch.utcDate ?? "",
+      selectedMatch.venue,
+      selectedMatch.city,
+      "latest 2026 odds ranking injury lineup team news weather head to head form",
+      "exclude old qualification claims that contradict the fixture",
     ].join(" ");
   }, [selectedMatch]);
 
   function updateForm<K extends keyof typeof EMPTY_FORM>(key: K, value: (typeof EMPTY_FORM)[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function cleanForSelectedMatch(nextItems: KnowledgeItem[]) {
+    if (!selectedMatchId) return nextItems;
+    const otherItems = nextItems.filter((item) => item.matchId && item.matchId !== selectedMatchId);
+    const scopeItems = nextItems.filter((item) => !item.matchId || item.matchId === selectedMatchId);
+    return mergeKnowledgeCollections(
+      otherItems,
+      filterKnowledgeItemsForMatch(scopeItems, selectedMatch),
+    );
   }
 
   function editItem(item: KnowledgeItem) {
@@ -236,7 +261,9 @@ export function KnowledgePanel({
       updatedAt: now,
     };
 
-    const nextItems = items.map((item) => (item.id === currentItem.id ? nextItem : item));
+    const nextItems = cleanForSelectedMatch(
+      items.map((item) => (item.id === currentItem.id ? nextItem : item)),
+    );
 
     setItems(nextItems);
     setCompiled(null);
@@ -251,7 +278,10 @@ export function KnowledgePanel({
         setNotice("not found");
         return;
       }
-      const scopedItems = nextItems.filter((item) => !item.matchId || item.matchId === selectedMatchId);
+      const scopedItems = filterKnowledgeItemsForMatch(
+        nextItems.filter((item) => !item.matchId || item.matchId === selectedMatchId),
+        selectedMatch,
+      );
       await compileKnowledge(scopedItems, selectedScopeKey);
     }
   }
@@ -291,7 +321,9 @@ export function KnowledgePanel({
       });
       const data = (await response.json()) as ApiResponse;
       if (!response.ok || data.error) throw new Error(data.error ?? "整理失败");
-      setItems((current) => mergeKnowledgeCollections(current, data.items ?? nextItems));
+      setItems((current) =>
+        mergeKnowledgeCollections(cleanForSelectedMatch(current), data.items ?? nextItems),
+      );
       setCompiled(data.compiled ?? null);
       setCompiledScopeKey(scopeKey);
       setStatus(data.warning ? "已基础整理" : "已整理");
@@ -329,7 +361,9 @@ export function KnowledgePanel({
       });
       const data = (await response.json()) as ApiResponse;
       if (!response.ok || data.error) throw new Error(data.error ?? "联网查找失败");
-      setItems((current) => mergeKnowledgeCollections(current, data.items ?? scopeItems));
+      setItems((current) =>
+        mergeKnowledgeCollections(cleanForSelectedMatch(current), data.items ?? scopeItems),
+      );
       setCompiled(data.compiled ?? null);
       setCompiledScopeKey(scopeKey);
       const incomingCount = data.incomingItems?.length ?? 0;
@@ -389,10 +423,15 @@ export function KnowledgePanel({
       const data = (await response.json()) as AgentImportResponse;
       if (!response.ok || data.error) throw new Error(data.error ?? "导入失败");
 
-      const nextItems = applyAgentImportActions(items, data.actions);
+      const rawNextItems = applyAgentImportActions(items, data.actions);
+      const nextItems = cleanForSelectedMatch(rawNextItems);
+      const blockedImportCount = rawNextItems.length - nextItems.length;
       const changed = nextItems.length !== items.length || Boolean(data.actions?.updateItems?.length);
       if (!changed) {
-        const message = data.reply ?? "没有识别到可入库的情报。";
+        const message =
+          blockedImportCount > 0
+            ? "已忽略与赛程冲突的旧资格信息。"
+            : data.reply ?? "没有识别到可入库的情报。";
         setImportNotice(message);
         setStatus(message);
         return;
@@ -405,7 +444,10 @@ export function KnowledgePanel({
       setImportOpen(false);
       setStatus("已导入，整理中");
 
-      const scopedItems = nextItems.filter((item) => !item.matchId || item.matchId === selectedMatchId);
+      const scopedItems = filterKnowledgeItemsForMatch(
+        nextItems.filter((item) => !item.matchId || item.matchId === selectedMatchId),
+        selectedMatch,
+      );
       if (data.actions?.compile === false) {
         setStatus("已导入，建议整理");
       } else {
